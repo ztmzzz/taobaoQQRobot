@@ -1,15 +1,22 @@
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gargoylesoftware.htmlunit.WebClient;
+import com.gargoylesoftware.htmlunit.html.HtmlPage;
 import okhttp3.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
-import java.io.*;
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,7 +32,7 @@ public class taobao {
     public static void main(String[] args) throws Exception {
         try {
             taobao t = new taobao();
-            System.out.println(t.is_auth_expired());
+            System.out.println(t.command2id(""));
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -77,13 +84,59 @@ public class taobao {
             command = matcher.group();
         else
             throw new IOException("没有找到网址,需要更新匹配方式");
-        Document doc = Jsoup.connect(command).get();
+        Document doc = Jsoup.connect(command).followRedirects(true).get();
+        //用户分享链接
         Element e = doc.getElementsByTag("script").get(1);
         String s = e.data();
+        if (s.equals(""))
+            return encryption_url2id(command);
         int a = s.indexOf("var url = '") + "var url = '".length();
         int b = s.indexOf("'", a);
         s = s.substring(a, b);
         return url2id(s);
+    }
+
+    private String encryption_url2id(String command) throws Exception {
+        String encryption_url;
+        String true_url;
+        //有优惠券的二合一链接
+        try (WebClient webClient = new WebClient()) {
+            Logger.getLogger("com.gargoylesoftware").setLevel(Level.OFF);
+            Logger.getLogger("org.apache.http.client.protocol.ResponseProcessCookies").setLevel(Level.SEVERE);
+            webClient.getOptions().setThrowExceptionOnScriptError(false);
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(false);
+            HtmlPage page = webClient.getPage(command);
+            Document doc = Jsoup.parse(page.asXml());
+            Element e = doc.selectFirst("#J_u_root > div > div:nth-child(2) > a");
+            if (e == null)
+                throw new Exception("二合一链接解析失败");
+            encryption_url = e.attr("href");//商品加密链接
+        }
+        //淘宝会先请求加密链接,得到需要跳转的链接,然后跳转链接加上referer得到真实链接
+        Document doc = Jsoup.connect(encryption_url).followRedirects(true).get();
+        String jump_url = doc.toString();//跳转链接
+        int a = jump_url.indexOf("var real_jump_address = '") + "var real_jump_address = '".length();
+        int b = jump_url.indexOf("'", a);
+        jump_url = jump_url.substring(a, b);
+        //去除跳转链接中的 amp;
+        jump_url = jump_url.replace("amp;", "");
+        //从302请求获得真实商品链接
+        OkHttpClient okHttpClient = new OkHttpClient.Builder().followRedirects(false).build();
+        Request request = new Request.Builder()
+                .url(jump_url)
+                .addHeader("Referer", encryption_url)
+                .get()
+                .build();
+        try (Response response = okHttpClient.newCall(request).execute()) {
+            if (response.code() == 302)
+                true_url = response.header("Location");
+            else
+                throw new Exception("真实商品链接解析失败");
+        }
+        String decode_url = URLDecoder.decode(Objects.requireNonNull(true_url), StandardCharsets.UTF_8);
+        a = decode_url.indexOf("https://detail.m.tmall.com");
+        decode_url = decode_url.substring(a);
+        return url2id(decode_url);
     }
 
     private String url2id(String url) throws Exception {
@@ -118,7 +171,7 @@ public class taobao {
                 .build();
         try (Response response = okHttpClient.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
-                String result = response.body().string();
+                String result = Objects.requireNonNull(response.body()).string();
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode node = mapper.readTree(result);
                 JsonNode data = node.get("data");
@@ -155,7 +208,7 @@ public class taobao {
                 .build();
         try (Response response = okHttpClient.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
-                String result = response.body().string();
+                String result = Objects.requireNonNull(response.body()).string();
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode node = mapper.readTree(result);
                 JsonNode data = node.get("data");
@@ -179,7 +232,7 @@ public class taobao {
                 .build();
         try (Response response = okHttpClient.newCall(request).execute()) {
             if (response.isSuccessful() && response.body() != null) {
-                String result = response.body().string();
+                String result = Objects.requireNonNull(response.body()).string();
                 Document doc = Jsoup.parse(result);
                 Element e = doc.selectFirst("#info > div > div:nth-child(4) > input");
                 if (e != null) {
