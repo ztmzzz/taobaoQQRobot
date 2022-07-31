@@ -214,6 +214,9 @@ public class taobao {
                 JsonNode data = node.get("data");
                 data = data.get(0);
                 String short_url = data.get("url").asText();
+                if (!short_url.startsWith("http")) {
+                    throw new Exception("商品没有推广链接");
+                }
                 String tkl = data.get("tkl").asText();
                 String name = tkl2name(tkl);
                 return "下单链接:" + short_url + " " + tkl + " " + name;
